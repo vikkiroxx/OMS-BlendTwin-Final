@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  blendtwin:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    restart: unless-stopped
+    # Use host network if DB is on host: network_mode: host

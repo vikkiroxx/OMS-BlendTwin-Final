@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlendTwin Trend Query Workbench</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>BlendTwin Trend Query Workbench</h1>
+      <div class="header-actions">
+        <button id="btn-new" class="btn btn-secondary">+ New Trend</button>
+        <button id="btn-save" class="btn btn-primary" disabled>Save</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="panel trends-panel">
+        <h2>Trends</h2>
+        <select id="trend-select" class="trend-select">
+          <option value="">-- Select a trend --</option>
+        </select>
+        <div id="trend-info" class="trend-info"></div>
+      </section>
+
+      <section class="panel params-panel">
+        <h2>Parameters</h2>
+        <div id="params-container" class="params-container">
+          <p class="muted">Select a trend to load parameters</p>
+        </div>
+      </section>
+
+      <section class="panel sql-panel">
+        <h2>SQL Editor</h2>
+        <textarea id="sql-editor"></textarea>
+        <div class="sql-actions">
+          <button id="btn-execute" class="btn btn-primary">Execute</button>
+        </div>
+      </section>
+
+      <section class="panel results-panel">
+        <h2>Results</h2>
+        <div id="results-container">
+          <div id="data-grid-container" class="data-grid-container hidden">
+            <div class="table-wrapper">
+              <table id="data-grid" class="data-grid"></table>
+            </div>
+          </div>
+          <div id="results-error" class="error-msg hidden"></div>
+          <div id="results-empty" class="muted">Execute a query to see results</div>
+        </div>
+      </section>
+
+      <section class="panel plot-panel">
+        <h2>Plot</h2>
+        <div id="plot-container" class="plot-container">
+          <canvas id="plot-canvas"></canvas>
+        </div>
+        <div id="plot-empty" class="muted">Plot will appear after successful query execution</div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modals -->
+  <div id="modal-new" class="modal hidden">
+    <div class="modal-content">
+      <h3>Create New Trend</h3>
+      <div class="form-group">
+        <label>Trend Code</label>
+        <input type="text" id="new-trend-code" placeholder="e.g. TI-01">
+      </div>
+      <div class="form-group">
+        <label>Trend Name</label>
+        <input type="text" id="new-trend-name" placeholder="e.g. Tank Inventory Trend">
+      </div>
+      <div class="form-group">
+        <label>SQL Template</label>
+        <textarea id="new-sql-template" rows="6" placeholder="SELECT cycleno, value, series FROM ... WHERE blendid = :blendid"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-cancel-new" class="btn btn-secondary">Cancel</button>
+        <button id="btn-create" class="btn btn-primary">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
