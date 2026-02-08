@@ -86,7 +86,7 @@ def api_list_trends(db: Session = Depends(get_db)):
 
 
 @app.get("/api/trends/by-id/{template_id}")
-def api_get_trend_by_id(template_id: int, db: Session = Depends(get_db)):
+def api_get_trend_by_id(template_id: str, db: Session = Depends(get_db)):
     """Get trend by template_id."""
     try:
         trend = get_trend_by_id(db, template_id)
@@ -128,7 +128,7 @@ def api_create_trend(req: CreateTrendRequest, db: Session = Depends(get_db)):
 
 
 @app.put("/api/trends/{template_id}")
-def api_update_trend(template_id: int, req: UpdateTrendRequest, db: Session = Depends(get_db)):
+def api_update_trend(template_id: str, req: UpdateTrendRequest, db: Session = Depends(get_db)):
     """Update existing SQL template."""
     try:
         trend = update_template(db, template_id, req.sql_template, req.trend_name)

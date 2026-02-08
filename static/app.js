@@ -175,25 +175,33 @@ function renderPlot(columns, rows) {
     return;
   }
 
-  const seriesMap = {};
-  rows.forEach((row) => {
-    const s = String(row[seriesIdx]);
-    if (!seriesMap[s]) seriesMap[s] = { x: [], y: [] };
-    seriesMap[s].x.push(Number(row[cyclenoIdx]));
-    seriesMap[s].y.push(Number(row[valueIdx]));
-  });
-
-  const datasets = Object.entries(seriesMap).map(([label, d], i) => ({
-    label,
-    data: d.x.map((x, j) => ({ x, y: d.y[j] })),
-    borderColor: getColor(i),
-    backgroundColor: getColor(i) + '40',
-    fill: false,
-    tension: 0.2,
-  }));
-
   const cfg = currentTrend?.plot_config || {};
   const ctx = document.getElementById('plot-canvas').getContext('2d');
+
+  const seriesMap = {};
+  const cyclenoCol = columns[cyclenoIdx];
+  const valueCol = columns[valueIdx];
+  const seriesCol = columns[seriesIdx];
+
+  rows.forEach((row) => {
+    const s = String(row[seriesCol]);
+    if (!seriesMap[s]) seriesMap[s] = { x: [], y: [] };
+    seriesMap[s].x.push(Number(row[cyclenoCol]));
+    seriesMap[s].y.push(Number(row[valueCol]));
+  });
+
+  const datasets = Object.entries(seriesMap).map(([label, d], i) => {
+    const sCfg = cfg.series_map?.[label] || {};
+    return {
+      label,
+      data: d.x.map((x, j) => ({ x, y: d.y[j] })),
+      borderColor: getColor(i),
+      backgroundColor: getColor(i) + '40',
+      fill: false,
+      tension: 0.2,
+      yAxisID: sCfg.axis || 'y',
+    };
+  });
 
   if (chart) chart.destroy();
   chart = new Chart(ctx, {
@@ -202,25 +210,50 @@ function renderPlot(columns, rows) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
       plugins: {
         title: { display: !!cfg.title, text: cfg.title || 'Trend' },
         legend: { position: 'top' },
       },
       scales: {
         x: {
-          title: { display: true, text: cfg.x_label || 'Cycle' },
+          title: { display: true, text: cfg.x_label || 'Cycle', color: '#656d76' },
           type: 'linear',
+          grid: { color: 'rgba(208, 215, 222, 0.4)' },
+          ticks: { color: '#656d76' }
         },
         y: {
-          title: { display: true, text: cfg.y_label || 'Value' },
+          type: 'linear',
+          display: true,
+          position: 'left',
+          title: { display: true, text: cfg.y_label || 'Value', color: '#656d76' },
+          grid: { color: 'rgba(208, 215, 222, 0.4)' },
+          ticks: { color: '#656d76' }
         },
+        y1: {
+          type: 'linear',
+          display: !!cfg.y2_label,
+          position: 'right',
+          title: { display: true, text: cfg.y2_label || '', color: '#656d76' },
+          grid: {
+            drawOnChartArea: false,
+          },
+          ticks: { color: '#656d76' }
+        },
+      },
+      plugins: {
+        title: { display: !!cfg.title, text: cfg.title || 'Trend', color: '#1f2328', font: { size: 14, weight: '600' } },
+        legend: { position: 'top', labels: { color: '#656d76' } },
       },
     },
   });
 }
 
 function getColor(i) {
-  const colors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#79c0ff'];
+  const colors = ['#0969da', '#1a7f37', '#9a6700', '#cf222e', '#8250df', '#2da44e'];
   return colors[i % colors.length];
 }
 

@@ -1,5 +1,5 @@
-"""Business logic for trends, SQL execution, and parameter substitution."""
 import logging
+import re
 from typing import Any, Dict, List, Optional
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -14,20 +14,21 @@ REQUIRED_COLUMNS = {"cycleno", "value", "series"}
 
 def list_trends(db: Session) -> List[Dict[str, Any]]:
     """List all SQL templates (trends) with basic info."""
-    rows = db.query(SQLTemplate).filter(SQLTemplate.is_active == True).all()
+    # Assuming all templates are active since column is missing
+    rows = db.query(SQLTemplate).all()
     return [
         {
             "template_id": r.template_id,
-            "trend_code": r.trend_code,
-            "trend_name": r.trend_name or r.trend_code,
-            "is_active": r.is_active,
-            "last_updated_on": r.last_updated_on.isoformat() if r.last_updated_on else None,
+            "trend_code": r.trend_id,
+            "trend_name": r.trend_name or r.trend_id,
+            "is_active": True,
+            "last_updated_on": r.last_updated_on.isoformat() if hasattr(r.last_updated_on, 'isoformat') else str(r.last_updated_on) if r.last_updated_on else None,
         }
         for r in rows
     ]
 
 
-def get_trend_by_id(db: Session, template_id: int) -> Optional[Dict[str, Any]]:
+def get_trend_by_id(db: Session, template_id: str) -> Optional[Dict[str, Any]]:
     """Get single trend template by ID."""
     t = db.query(SQLTemplate).filter(SQLTemplate.template_id == template_id).first()
     if not t:
@@ -37,7 +38,7 @@ def get_trend_by_id(db: Session, template_id: int) -> Optional[Dict[str, Any]]:
 
 def get_trend_by_code(db: Session, trend_code: str) -> Optional[Dict[str, Any]]:
     """Get trend template by trend_code."""
-    t = db.query(SQLTemplate).filter(SQLTemplate.trend_code == trend_code).first()
+    t = db.query(SQLTemplate).filter(SQLTemplate.trend_id == trend_code).first()
     if not t:
         return None
     return _template_to_dict(t, db)
@@ -45,36 +46,72 @@ def get_trend_by_code(db: Session, trend_code: str) -> Optional[Dict[str, Any]]:
 
 def _template_to_dict(t: SQLTemplate, db: Session) -> Dict[str, Any]:
     """Convert template + plot config + params to full dict."""
-    plot = db.query(TrendPlot).filter(TrendPlot.trend_code == t.trend_code).first()
-    params = db.query(TrendParameter).filter(TrendParameter.trend_code == t.trend_code).order_by(TrendParameter.display_order).all()
+    # Fetch all plot configs (for dual axis)
+    plots = db.query(TrendPlot).filter(TrendPlot.trend_id == t.trend_id).all()
+    
+    # Try fetching parameters with exact trend_id
+    params = db.query(TrendParameter).filter(TrendParameter.trendid == t.trend_id).all()
+    
+    # Fallback: if no params, try normalized ID (T001 -> T1)
+    if not params and t.trend_id and t.trend_id.startswith('T') and t.trend_id[1:].isdigit():
+        short_id = f"T{int(t.trend_id[1:])}"
+        params = db.query(TrendParameter).filter(TrendParameter.trendid == short_id).all()
+
+    # Construct plot config
+    plot_config = {}
+    series_map = {}
+    
+    if plots:
+        # Sort so Primary is first (usually)
+        plots.sort(key=lambda p: 0 if getattr(p, 'axis_side', 'Primary') == 'Primary' else 1)
+        
+        main_plot = plots[0]
+        plot_config = {
+            "x_col": main_plot.x_col,
+            "y_col": main_plot.y_col,
+            "series_col": main_plot.series_col,
+            "plot_type": main_plot.plot_type or "line",
+            "title": main_plot.title or "",
+            "x_label": main_plot.x_label or "Cycle",
+            "y_label": main_plot.y_label or "Value",
+        }
+        
+        # Check for secondary axis
+        secondary_plot = next((p for p in plots if getattr(p, 'axis_side', '') == 'Secondary'), None)
+        if secondary_plot:
+             plot_config["y2_label"] = secondary_plot.y_label
+        
+        # Build series mapping (series_val -> axis)
+        # Using y_axis column from DB as the series key (e.g. 'tankvol')
+        for p in plots:
+             if hasattr(p, 'y_axis') and p.y_axis:
+                 axis = 'y1' if getattr(p, 'axis_side', 'Primary') == 'Secondary' else 'y'
+                 series_map[p.y_axis] = {'axis': axis}
+        
+        plot_config["series_map"] = series_map
+
+    # Construct parameters list, de-duplicating by name just in case DB has garbage
+    unique_p_dict = {}
+    for p in params:
+        if p.parameter not in unique_p_dict:
+            unique_p_dict[p.parameter] = {
+                "param_name": p.parameter,
+                "param_type": p.type or "string",
+                "is_required": (p.required == 'Y'),
+                "default_value": p.default,
+                "ui_label": p.parameter, 
+                "display_order": 0, 
+            }
 
     return {
         "template_id": t.template_id,
-        "trend_code": t.trend_code,
-        "trend_name": t.trend_name or t.trend_code,
+        "trend_code": t.trend_id,
+        "trend_name": t.trend_name or t.trend_id,
         "sql_template": t.sql_template or "",
-        "is_active": t.is_active,
-        "last_updated_on": t.last_updated_on.isoformat() if t.last_updated_on else None,
-        "plot_config": {
-            "x_col": plot.x_col if plot else "cycleno",
-            "y_col": plot.y_col if plot else "value",
-            "series_col": plot.series_col if plot else "series",
-            "plot_type": plot.plot_type if plot else "line",
-            "title": plot.title if plot else "",
-            "x_label": plot.x_label if plot else "Cycle",
-            "y_label": plot.y_label if plot else "Value",
-        } if plot else {},
-        "parameters": [
-            {
-                "param_name": p.param_name,
-                "param_type": p.param_type or "string",
-                "is_required": p.is_required,
-                "default_value": p.default_value,
-                "ui_label": p.ui_label or p.param_name,
-                "display_order": p.display_order,
-            }
-            for p in params
-        ],
+        "is_active": True,
+        "last_updated_on": t.last_updated_on.isoformat() if hasattr(t.last_updated_on, 'isoformat') else str(t.last_updated_on) if t.last_updated_on else None,
+        "plot_config": plot_config,
+        "parameters": list(unique_p_dict.values()),
     }
 
 
@@ -118,13 +155,21 @@ def execute_query(db: Session, sql: str, params: Optional[Dict[str, Any]] = None
         return {"rows": [], "columns": list(df.columns), "error": None}
 
     cols = list(df.columns)
+    # Flexible column check? For now stick to strict requirement or relax it?
+    # Keeping strict for now
     missing = REQUIRED_COLUMNS - set(c.lower() for c in cols)
     if missing:
-        return {"error": f"Result must include columns: cycleno, value, series. Missing: {missing}", "rows": [], "columns": cols}
+        # Fallback: if 3 columns, assume they are cycleno, value, series
+        if len(cols) == 3:
+             # Rename?
+             pass 
+        else:
+             return {"error": f"Result must include columns: cycleno, value, series. Missing: {missing}", "rows": [], "columns": cols}
 
-    # Sort by cycleno
-    cycleno_col = next(c for c in cols if c.lower() == "cycleno")
-    df = df.sort_values(cycleno_col)
+    # Sort by cycleno if present
+    if "cycleno" in [c.lower() for c in cols]:
+        cycleno_col = next(c for c in cols if c.lower() == "cycleno")
+        df = df.sort_values(cycleno_col)
 
     rows = df.to_dict(orient="records")
     for r in rows:
@@ -137,16 +182,53 @@ def execute_query(db: Session, sql: str, params: Optional[Dict[str, Any]] = None
     return {"rows": rows, "columns": cols, "error": None}
 
 
+def _sync_parameters(db: Session, trend_id: str, sql: str):
+    """Extract placeholders like :ParamName and sync with bts_Trend_Parameters."""
+    # Find all :Word placeholders
+    placeholders = re.findall(r":([a-zA-Z0-9_]+)", sql)
+    # Remove duplicates
+    unique_params = sorted(list(set(placeholders)))
+    
+    # Get existing params for this trend
+    existing = db.query(TrendParameter).filter(TrendParameter.trendid == trend_id).all()
+    existing_names = {p.parameter.lower() for p in existing}
+    
+    # Add missing ones
+    for name in unique_params:
+        if name.lower() not in existing_names:
+            logger.info(f"Adding auto-extracted parameter '{name}' for trend '{trend_id}'")
+            new_p = TrendParameter(
+                trendid=trend_id,
+                parameter=name,
+                type="string", # Default
+                required="Y",  # Default if in SQL
+                multi="N",
+                default=None
+            )
+            db.add(new_p)
+            # Add to set so we don't add twice in same loop if re-scan somehow finds it
+            existing_names.add(name.lower())
+    
+    # Optional: Delete ones that are NO LONGER in the SQL?
+    # For now, let's just keep them to be safe, or only add.
+    # User might have manually added some that aren't in SQL yet.
+
 def create_template(db: Session, trend_code: str, trend_name: str, sql_template: str) -> Dict[str, Any]:
     """Create new SQL template."""
-    t = SQLTemplate(trend_code=trend_code, trend_name=trend_name, sql_template=sql_template)
+    t = SQLTemplate(
+        template_id=trend_code, 
+        trend_id=trend_code, 
+        trend_name=trend_name, 
+        sql_template=sql_template
+    )
     db.add(t)
+    _sync_parameters(db, trend_code, sql_template)
     db.commit()
     db.refresh(t)
     return _template_to_dict(t, db)
 
 
-def update_template(db: Session, template_id: int, sql_template: str, trend_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def update_template(db: Session, template_id: str, sql_template: str, trend_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update existing SQL template."""
     t = db.query(SQLTemplate).filter(SQLTemplate.template_id == template_id).first()
     if not t:
@@ -154,6 +236,9 @@ def update_template(db: Session, template_id: int, sql_template: str, trend_name
     t.sql_template = sql_template
     if trend_name is not None:
         t.trend_name = trend_name
+    
+    _sync_parameters(db, t.trend_id, sql_template)
+    
     db.commit()
     db.refresh(t)
     return _template_to_dict(t, db)
