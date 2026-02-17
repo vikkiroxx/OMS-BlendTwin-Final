@@ -21,6 +21,12 @@ from app.services import (
     update_template,
     execute_query,
     get_schema,
+    get_trend_params_list,
+    delete_template,
+    list_plots_for_trend,
+    create_plot,
+    update_plot,
+    delete_plot,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -53,15 +59,30 @@ class ExecuteRequest(BaseModel):
     params: dict | None = None
 
 
+class TrendParameterCreate(BaseModel):
+    parameter: str
+    type: str = "string"
+    required: str = "Y"
+    multi: str = "N"
+    default: str | None = None
+
+
 class CreateTrendRequest(BaseModel):
     trend_code: str
     trend_name: str
     sql_template: str
+    refid: str | None = None
+    template_id: str | None = None  # If different from trend_code
+    parameters: list[TrendParameterCreate] | None = None  # BlendID added by default
 
 
 class UpdateTrendRequest(BaseModel):
     sql_template: str
     trend_name: str | None = None
+
+
+class PlotConfigBody(BaseModel):
+    config: dict  # Full plot config: title, type, x_col, y_cols, colors, etc.
 
 
 # --- API Routes ---
@@ -117,9 +138,17 @@ def api_get_trend_by_code(trend_code: str, db: Session = Depends(get_db)):
 
 @app.post("/api/trends")
 def api_create_trend(req: CreateTrendRequest, db: Session = Depends(get_db)):
-    """Create new SQL template."""
+    """Create new SQL template with optional refid and parameters."""
     try:
-        trend = create_template(db, req.trend_code, req.trend_name, req.sql_template)
+        trend = create_template(
+            db,
+            trend_code=req.trend_code,
+            trend_name=req.trend_name,
+            sql_template=req.sql_template,
+            refid=req.refid,
+            template_id=req.template_id,
+            parameters=req.parameters,
+        )
         return trend
     except Exception as e:
         logger.exception("Create trend failed")
@@ -139,6 +168,21 @@ def api_update_trend(template_id: str, req: UpdateTrendRequest, db: Session = De
         raise
     except Exception as e:
         logger.exception("Update trend failed")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/trends/{template_id}")
+def api_delete_trend(template_id: str, db: Session = Depends(get_db)):
+    """Delete existing SQL template."""
+    try:
+        success = delete_template(db, template_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Trend not found")
+        return {"message": "Trend deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Delete trend failed")
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -166,6 +210,100 @@ def api_schema(db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception("Schema fetch failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/trend-params")
+def api_trend_params(db: Session = Depends(get_db)):
+    """Get list of allowed trend parameter names from trend_parms column or fallback."""
+    try:
+        params = get_trend_params_list(db)
+        return {"params": params}
+    except Exception as e:
+        logger.exception("Trend params fetch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Plot CRUD (bts_cfg_trend_plots) ---
+
+@app.get("/api/trends/{template_id}/plots")
+def api_list_plots(template_id: str, db: Session = Depends(get_db)):
+    """List saved plots for a trend."""
+    try:
+        plots = list_plots_for_trend(db, template_id)
+        return {"plots": plots}
+    except Exception as e:
+        logger.exception("List plots failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/trends/{template_id}/plots")
+def api_create_plot(template_id: str, req: PlotConfigBody, db: Session = Depends(get_db)):
+    """Save a new plot config to bts_cfg_trend_plots."""
+    try:
+        plot = create_plot(db, template_id, req.config)
+        if not plot:
+            raise HTTPException(status_code=404, detail="Trend not found")
+        return plot
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Create plot failed")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/trends/{template_id}/plots/{plot_id}")
+def api_update_plot(template_id: str, plot_id: int, req: PlotConfigBody, db: Session = Depends(get_db)):
+    """Update an existing saved plot."""
+    try:
+        plot = update_plot(db, template_id, plot_id, req.config)
+        if not plot:
+            raise HTTPException(status_code=404, detail="Plot or trend not found")
+        return plot
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Update plot failed")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/trends/{template_id}/plots/{plot_id}")
+def api_delete_plot(template_id: str, plot_id: int, db: Session = Depends(get_db)):
+    """Delete a saved plot."""
+    try:
+        success = delete_plot(db, template_id, plot_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Plot or trend not found")
+        return {"message": "Plot deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Delete plot failed")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dropdown-options")
+def api_dropdown_options(db: Session = Depends(get_db)):
+    """Get dropdown options from bts_DropDownList for Quality, Model, Stream, Tank No."""
+    from sqlalchemy import text
+    result = {}
+    mappings = [
+        ("quality", "quality"),
+        ("streams", "streams"),
+        ("tank_no", "tank_no"),
+        ("ai_mixing_model", "ai_mixing_model"),
+    ]
+    for col, key in mappings:
+        try:
+            rows = db.execute(
+                text(f"SELECT DISTINCT `{col}` FROM bts_DropDownList WHERE `{col}` IS NOT NULL AND `{col}` != '' ORDER BY `{col}`")
+            ).fetchall()
+            result[key] = [str(r[0]).strip() for r in rows if r[0]]
+        except Exception:
+            result[key] = []
+    return result
 
 
 # --- Static files & SPA ---

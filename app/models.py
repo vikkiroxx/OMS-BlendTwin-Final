@@ -41,6 +41,9 @@ class TrendPlot(Base):
     x_label = Column(String(100), nullable=True)
     y_label = Column(String(100), nullable=True)
     axis_side = Column(String(50), nullable=True)
+    # New: full plot config (title, type, x_col, y_cols with colors, etc.)
+    config_json = Column(Text, nullable=True)
+    plot_order = Column(Integer, default=0)
 
 
 class TrendParameter(Base):
