@@ -94,7 +94,7 @@
   <div id="modal-add-plot" class="modal hidden">
     <div class="modal-content modal-plot">
       <h3>Add Plot</h3>
-      <p class="plot-hint muted">Columns from your query result. Select X-axis, Y-axis (single line), or Values to plot (multiple lines with colors).</p>
+      <p class="plot-hint muted">Select X-axis, then values for Y1 (left) and/or Y2 (right). Each value becomes a line. Use 1 axis or both.</p>
       <div class="form-group">
         <label>Plot Title</label>
         <input type="text" id="plot-title" placeholder="e.g. Tank Volume vs Flow">
@@ -120,8 +120,18 @@
         </select>
       </div>
       <div class="form-group plot-config-line">
-        <label>3. Values to plot <span class="muted">(select multiple – each becomes a line with its own color)</span></label>
+        <label>3. Values to plot <span class="muted">(select multiple – each becomes a line; assign Y1 or Y2 axis)</span></label>
         <div class="plot-values-list" id="plot-y-cols-multi"></div>
+      </div>
+      <div class="form-group plot-config-line plot-config-y2">
+        <label>4. Y2 value <span class="muted">(optional – select a column for the right Y-axis)</span></label>
+        <select id="plot-y2-col">
+          <option value="">— None —</option>
+        </select>
+      </div>
+      <div class="form-group plot-config-line plot-config-y2">
+        <label>Y2 Axis Label <span class="muted">(right axis)</span></label>
+        <input type="text" id="plot-y2-label" placeholder="e.g. Temperature (°C)">
       </div>
       <div class="form-group plot-config-pie hidden">
         <label>Label Column</label>
@@ -131,12 +141,18 @@
         <label>Value Column</label>
         <select id="plot-pie-value-col"></select>
       </div>
+      <div class="form-group plot-config-pie hidden">
+        <label class="checkbox-label">
+          <input type="checkbox" id="plot-pie-show-percent" checked>
+          Show % distribution labels inside pie slices
+        </label>
+      </div>
       <div class="form-group">
         <label>X Axis Label</label>
         <input type="text" id="plot-x-label" placeholder="e.g. Blend Cycle (5 min)">
       </div>
-      <div class="form-group">
-        <label>Y Axis Label</label>
+      <div class="form-group plot-config-line">
+        <label>Y1 Axis Label <span class="muted">(left axis)</span></label>
         <input type="text" id="plot-y-label" placeholder="e.g. Quality (ron)">
       </div>
       <div class="modal-actions">
@@ -268,6 +284,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="/static/app.js"></script>
 </body>
 

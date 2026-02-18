@@ -1,5 +1,10 @@
 const API = '/api';
 
+// Register chartjs-plugin-datalabels for pie % labels (loaded via script before app.js)
+if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
+  Chart.register(ChartDataLabels);
+}
+
 let editor = null;
 let currentTrend = null;
 let dbSchema = null;
@@ -91,18 +96,52 @@ async function api(path, options = {}) {
 
 // --- Load Trends ---
 async function loadTrends() {
-  const { trends } = await api('/trends');
-  trendSelect.innerHTML = '<option value="">-- Select a trend --</option>';
-  trends.forEach((t) => {
-    const opt = document.createElement('option');
-    opt.value = t.template_id;
-    opt.textContent = `${t.trend_code} - ${t.trend_name || t.trend_code}`;
-    trendSelect.appendChild(opt);
-  });
+  try {
+    const data = await api('/trends');
+    const trends = data?.trends ?? [];
+    trendSelect.innerHTML = '<option value="">-- Select a trend --</option>';
+    trends.forEach((t) => {
+      const opt = document.createElement('option');
+      opt.value = t.template_id;
+      opt.textContent = `${t.trend_code || t.template_id} - ${t.trend_name || t.trend_code || t.template_id}`;
+      trendSelect.appendChild(opt);
+    });
+    if (trends.length === 0) {
+      showToast('info', 'No trends found. Create one with + New Trend.');
+    }
+  } catch (e) {
+    console.error('Load trends failed:', e);
+    showToast('error', 'Failed to load trends: ' + e.message);
+    trendSelect.innerHTML = '<option value="">-- Select a trend --</option>';
+  }
+}
+
+/** Clear all page data: results, plots, params, errors. Call when switching or deleting trends. */
+function refreshPageData() {
+  lastQueryResult = null;
+  plotConfigs = [];
+  chartInstances.forEach((c) => { if (c) c.destroy(); });
+  chartInstances = [];
+  dataGrid.innerHTML = '';
+  if (resultsError) {
+    resultsError.textContent = '';
+    resultsError.classList.add('hidden');
+  }
+  if (resultsEmpty) {
+    resultsEmpty.textContent = '';
+    resultsEmpty.classList.add('hidden');
+  }
+  if (dataGridContainer) dataGridContainer.classList.add('hidden');
+  if (plotEmpty) {
+    plotEmpty.classList.remove('hidden');
+    plotEmpty.textContent = 'Execute a query to see results';
+  }
+  renderPlotsCanvas();
 }
 
 // --- Load Single Trend ---
 async function loadTrend(templateId) {
+  refreshPageData();
   const trend = await api(`/trends/by-id/${templateId}`);
   currentTrend = trend;
   editor.setValue(trend.sql_template || '');
@@ -115,10 +154,7 @@ async function loadTrend(templateId) {
   btnDelete.disabled = false;
   btnSettings.classList.remove('hidden');
   btnLoadSaved.disabled = false;
-  plotConfigs = [];
-  chartInstances.forEach((c) => { if (c) c.destroy(); });
-  chartInstances = [];
-  renderPlotsCanvas();
+  btnAddPlot.disabled = true;
 }
 
 const PARAM_LABELS = {
@@ -343,8 +379,9 @@ let editPlotIdx = null; // When editing, index of plot in plotConfigs
 
 function renderPlotsCanvas() {
   if (!plotsCanvas) return;
-  plotsCanvas.innerHTML = '';
+  chartInstances.forEach((c) => { if (c && typeof c.destroy === 'function') c.destroy(); });
   chartInstances = [];
+  plotsCanvas.innerHTML = '';
   if (plotConfigs.length === 0) {
     if (plotEmpty) plotEmpty.classList.remove('hidden');
     return;
@@ -451,16 +488,29 @@ function renderSinglePlot(ctx, cfg) {
       borderWidth: 1,
     }];
     const labels = Object.keys(labelMap);
+    const showPercent = cfg.pie_show_percent_labels !== false;
+    const plugins = {
+      title: { display: true, text: cfg.title || 'Pie Chart' },
+      legend: { position: 'right' },
+    };
+    if (showPercent) {
+      plugins.datalabels = {
+        display: true,
+        color: '#fff',
+        font: { size: 12, weight: 'bold' },
+        formatter: (value, ctx) => {
+          const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+          return total > 0 ? ((value / total) * 100).toFixed(1) + '%' : '';
+        },
+      };
+    }
     return new Chart(ctx, {
       type: 'pie',
       data: { labels, datasets },
       options: {
         responsive: true,
         maintainAspectRatio: true,
-        plugins: {
-          title: { display: true, text: cfg.title || 'Pie Chart' },
-          legend: { position: 'right' },
-        },
+        plugins,
       },
     });
   }
@@ -505,6 +555,7 @@ function renderSinglePlot(ctx, cfg) {
         plugins: {
           title: { display: true, text: cfg.title || 'Bar Chart' },
           legend: { position: 'top' },
+          datalabels: { display: false },
         },
         scales: {
           x: {
@@ -522,9 +573,16 @@ function renderSinglePlot(ctx, cfg) {
 
   // line (default)
   let datasets;
+  const y1Cols = yCols.filter((item) => (typeof item === 'object' && item?.axis === 'y2') ? false : true);
+  const y2Cols = yCols.filter((item) => typeof item === 'object' && item?.axis === 'y2');
+  const hasY2 = y2Cols.length > 0;
+  const y1Label = cfg.y_label || (y1Cols[0] ? (typeof y1Cols[0] === 'string' ? y1Cols[0] : y1Cols[0].col) : yCol);
+  const y2Label = cfg.y2_label || (y2Cols[0] ? (typeof y2Cols[0] === 'string' ? y2Cols[0] : y2Cols[0].col) : 'Y2');
+
   if (seriesMode === 'custom' && customSeries.length > 0) {
     datasets = customSeries.map((s, i) => {
       const color = s.color || getColor(i);
+      const axis = (s.axis === 'y2') ? 'y2' : 'y';
       return {
         label: s.label,
         data: rows.map((r) => ({
@@ -535,6 +593,7 @@ function renderSinglePlot(ctx, cfg) {
         backgroundColor: color + '40',
         fill: false,
         tension: 0.2,
+        yAxisID: axis,
       };
     });
   } else if (seriesMode === 'multi_col' && yCols.length > 0) {
@@ -542,6 +601,7 @@ function renderSinglePlot(ctx, cfg) {
       const col = typeof item === 'string' ? item : item.col;
       const label = typeof item === 'string' ? item : (item.label || item.col);
       const color = typeof item === 'object' && item.color ? item.color : getColor(i);
+      const axis = (typeof item === 'object' && item.axis === 'y2') ? 'y2' : 'y';
       return {
         label,
         data: rows.map((r) => ({
@@ -552,10 +612,12 @@ function renderSinglePlot(ctx, cfg) {
         backgroundColor: color + '40',
         fill: false,
         tension: 0.2,
+        yAxisID: axis,
       };
     });
   } else if (seriesCol) {
     datasets = buildSeriesDatasets(rows, xCol, yCol, seriesCol);
+    datasets.forEach((d) => { d.yAxisID = 'y'; });
   } else {
     datasets = [{
       label: yCol,
@@ -564,8 +626,32 @@ function renderSinglePlot(ctx, cfg) {
       backgroundColor: getColor(0) + '40',
       fill: false,
       tension: 0.2,
+      yAxisID: 'y',
     }];
   }
+
+  const hasY1 = y1Cols.length > 0;
+  const scales = {
+    x: {
+      title: { display: true, text: cfg.x_label || xCol },
+      type: 'linear',
+    },
+    y: {
+      position: 'left',
+      title: { display: true, text: y1Label },
+      type: 'linear',
+      display: hasY1,
+    },
+  };
+  if (hasY2) {
+    scales.y2 = {
+      position: 'right',
+      title: { display: true, text: y2Label },
+      type: 'linear',
+      grid: { drawOnChartArea: !hasY1 },
+    };
+  }
+
   return new Chart(ctx, {
     type: 'line',
     data: { datasets },
@@ -576,17 +662,9 @@ function renderSinglePlot(ctx, cfg) {
       plugins: {
         title: { display: true, text: cfg.title || 'Line Chart' },
         legend: { position: 'top' },
+        datalabels: { display: false },
       },
-      scales: {
-        x: {
-          title: { display: true, text: cfg.x_label || xCol },
-          type: 'linear',
-        },
-        y: {
-          title: { display: true, text: cfg.y_label || yCol },
-          type: 'linear',
-        },
-      },
+      scales,
     },
   });
 }
@@ -642,12 +720,17 @@ async function deleteTrend() {
   try {
     await api(`/trends/${currentTrend.template_id}`, { method: 'DELETE' });
     currentTrend = null;
+    refreshPageData();
     editor.setValue('');
     btnSave.disabled = true;
     btnDelete.disabled = true;
     btnSettings.classList.add('hidden');
+    btnLoadSaved.disabled = true;
+    btnAddPlot.disabled = true;
     trendInfo.textContent = '';
+    paramsContainer.innerHTML = '<p class="muted">Select a trend to load parameters</p>';
     await loadTrends();
+    trendSelect.value = '';
     showToast('success', 'Trend deleted');
   } catch (e) {
     showToast('error', 'Delete failed: ' + e.message);
@@ -977,16 +1060,33 @@ function updateBuilderPreview() {
     }
   });
 
-  sql += '\nLIMIT 100';
+  // Add WHERE clause with trend parameters (param -> column mapping for known params)
+  const PARAM_TO_COLUMN = {
+    blendid: 'BlendID',
+    stream: 'streams',
+    model: 'ai_mixing_model',
+    tankno: 'tank_no',
+    quality: 'quality',
+  };
+  if (currentTrend && currentTrend.parameters && currentTrend.parameters.length > 0) {
+    const conditions = currentTrend.parameters.map((p) => {
+      const paramName = p.param_name || p.parameter || p;
+      const nameLower = String(paramName).toLowerCase();
+      const column = PARAM_TO_COLUMN[nameLower] || paramName;
+      return `\`${column}\` = :${paramName}`;
+    });
+    if (conditions.length > 0) {
+      sql += '\nWHERE ' + conditions.join(' AND ');
+    }
+  }
+
   builderSqlPreview.value = sql;
 }
 
 btnInsertSql.onclick = () => {
   const sql = builderSqlPreview.value;
   if (sql) {
-    const doc = editor.getDoc();
-    const cursor = doc.getCursor();
-    doc.replaceRange(sql, cursor);
+    editor.setValue(sql);
     modalBuilder.classList.add('hidden');
   }
 };
@@ -1028,6 +1128,7 @@ trendSelect.addEventListener('change', async () => {
   const id = trendSelect.value;
   if (!id) {
     currentTrend = null;
+    refreshPageData();
     editor.setValue('');
     btnSave.disabled = true;
     btnDelete.disabled = true;
@@ -1035,8 +1136,7 @@ trendSelect.addEventListener('change', async () => {
     btnLoadSaved.disabled = true;
     btnAddPlot.disabled = true;
     trendInfo.textContent = '';
-    plotConfigs = [];
-    syncParamsFromSql();
+    paramsContainer.innerHTML = '<p class="muted">Select a trend to load parameters</p>';
     return;
   }
   await loadTrend(id);
@@ -1064,21 +1164,41 @@ function showAddPlotModal() {
 }
 
 function showEditPlotModal(idx) {
-  if (!lastQueryResult?.columns?.length) return;
   editPlotIdx = idx;
   const cfg = plotConfigs[idx];
   if (!cfg) return;
+  const hasCols = (cfg?.y_cols || cfg?.yCols || []).length > 0 || cfg?.x_col;
+  if (!lastQueryResult?.columns?.length && !hasCols) {
+    showToast('error', 'Execute a query first to edit plot, or load a saved plot.');
+    return;
+  }
   _populatePlotModal(cfg);
   if (btnSavePlot) btnSavePlot.textContent = 'Update';
   modalAddPlot?.classList.remove('hidden');
 }
 
+function _normalizeYCols(yCols) {
+  if (!Array.isArray(yCols)) return [];
+  return yCols.map((y, i) => {
+    if (typeof y === 'string') return { col: y, label: y, color: getColor(i), axis: 'y' };
+    const col = y?.col ?? y?.label ?? y?.parameter ?? '';
+    return { col, label: y?.label ?? col, color: y?.color ?? getColor(i), axis: y?.axis === 'y2' ? 'y2' : 'y' };
+  }).filter((y) => y.col);
+}
+
 function _populatePlotModal(existingCfg = null) {
-  if (!lastQueryResult?.columns?.length) {
+  const rawYCols = existingCfg?.y_cols || existingCfg?.yCols || [];
+  const yCols = _normalizeYCols(rawYCols);
+  const hasConfigCols = yCols.length > 0 || existingCfg?.x_col;
+
+  if (!lastQueryResult?.columns?.length && !hasConfigCols) {
     showToast('error', 'Execute a query first to add plots.');
     return;
   }
-  const cols = lastQueryResult.columns;
+  const queryCols = lastQueryResult?.columns || [];
+  const existingCols = yCols.map((y) => y.col);
+  const existingX = existingCfg?.x_col ? [existingCfg.x_col] : [];
+  const cols = [...new Set([...existingCols, ...existingX, ...queryCols])].filter(Boolean);
   const sel = (id) => document.getElementById(id);
   const colOpts = cols.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
 
@@ -1088,17 +1208,33 @@ function _populatePlotModal(existingCfg = null) {
   sel('plot-y-col').innerHTML = '<option value="">— Select —</option>' + colOpts;
   sel('plot-pie-label-col').innerHTML = cols.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   sel('plot-pie-value-col').innerHTML = cols.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  const y2ColOpts = '<option value="">— None —</option>' + cols.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  const y2ColEl = document.getElementById('plot-y2-col');
+  if (y2ColEl) y2ColEl.innerHTML = y2ColOpts;
 
-  const yCols = existingCfg?.y_cols || [];
   const multiContainer = document.getElementById('plot-y-cols-multi');
+  const findItem = (col) => {
+    if (!col) return null;
+    const colLower = String(col).toLowerCase().trim();
+    return yCols.find((y) => {
+      const yCol = String(y.col || '').toLowerCase().trim();
+      const yLabel = String(y.label || '').toLowerCase().trim();
+      return yCol === colLower || yLabel === colLower;
+    });
+  };
   multiContainer.innerHTML = cols.map((c, i) => {
-    const item = yCols.find((y) => (typeof y === 'string' ? y : y.col) === c);
+    const item = findItem(c);
     const checked = item ? 'checked' : '';
-    const color = (typeof item === 'object' && item?.color) ? item.color : getColor(i);
+    const color = item?.color || getColor(i);
+    const axis = item?.axis || 'y';
     return `
     <div class="plot-value-row">
       <input type="checkbox" value="${escapeHtml(c)}" class="plot-value-check" ${checked}>
       <span class="plot-value-name">${escapeHtml(c)}</span>
+      <select class="plot-value-axis" title="Y-axis">
+        <option value="y" ${axis === 'y' ? 'selected' : ''}>Y1</option>
+        <option value="y2" ${axis === 'y2' ? 'selected' : ''}>Y2</option>
+      </select>
       <div class="plot-color-swatch">
         <input type="color" value="${color}" class="plot-value-color" title="Color for ${escapeHtml(c)}">
       </div>
@@ -1108,12 +1244,19 @@ function _populatePlotModal(existingCfg = null) {
 
   sel('plot-x-label').value = existingCfg?.x_label || '';
   sel('plot-y-label').value = existingCfg?.y_label || '';
+  const y2LabelEl = document.getElementById('plot-y2-label');
+  if (y2LabelEl) y2LabelEl.value = existingCfg?.y2_label || '';
+  const y2Item = existingCfg?.y_cols?.find((y) => typeof y === 'object' && y?.axis === 'y2');
+  const y2ColFromCfg = y2Item ? (typeof y2Item === 'string' ? y2Item : y2Item.col) : null;
+  if (y2ColEl && y2ColFromCfg) y2ColEl.value = y2ColFromCfg;
   if (existingCfg?.x_col) {
     const xSel = sel('plot-x-col');
     if (xSel) xSel.value = existingCfg.x_col;
   }
   if (existingCfg?.pie_label_col) sel('plot-pie-label-col').value = existingCfg.pie_label_col;
   if (existingCfg?.pie_value_col) sel('plot-pie-value-col').value = existingCfg.pie_value_col;
+  const piePercentCheck = document.getElementById('plot-pie-show-percent');
+  if (piePercentCheck) piePercentCheck.checked = existingCfg?.pie_show_percent_labels !== false;
 
   togglePlotTypeFields(existingCfg?.type || 'line');
   if (btnSavePlot) btnSavePlot.textContent = existingCfg ? 'Update' : 'Add Plot';
@@ -1123,6 +1266,7 @@ function _populatePlotModal(existingCfg = null) {
 function togglePlotTypeFields(type) {
   document.querySelectorAll('.plot-config-line').forEach((el) => { el.style.display = type === 'pie' ? 'none' : ''; });
   document.querySelectorAll('.plot-config-pie').forEach((el) => { el.classList.toggle('hidden', type !== 'pie'); });
+  document.querySelectorAll('.plot-config-y2').forEach((el) => { el.style.display = type === 'line' ? '' : 'none'; });
 }
 
 document.getElementById('plot-type')?.addEventListener('change', (e) => {
@@ -1154,12 +1298,24 @@ function savePlotConfig() {
       if (cb?.checked) {
         const col = cb.value;
         const colorInp = row.querySelector('.plot-value-color');
-        cfg.y_cols.push({ col, label: col, color: colorInp?.value || getColor(cfg.y_cols.length) });
+        const axisSel = row.querySelector('.plot-value-axis');
+        const axis = axisSel?.value || 'y';
+        cfg.y_cols.push({ col, label: col, color: colorInp?.value || getColor(cfg.y_cols.length), axis });
       }
     });
     if (cfg.y_cols.length === 0 && yColSingle) {
-      cfg.y_cols = [{ col: yColSingle, label: yColSingle, color: getColor(0) }];
+      cfg.y_cols = [{ col: yColSingle, label: yColSingle, color: getColor(0), axis: 'y' }];
     }
+    const y2Col = document.getElementById('plot-y2-col')?.value?.trim();
+    if (y2Col) {
+      const existing = cfg.y_cols.find((y) => y.col === y2Col);
+      if (existing) {
+        existing.axis = 'y2';
+      } else {
+        cfg.y_cols.push({ col: y2Col, label: y2Col, color: getColor(cfg.y_cols.length), axis: 'y2' });
+      }
+    }
+    cfg.y2_label = document.getElementById('plot-y2-label')?.value?.trim() || undefined;
     if (!cfg.y_cols?.length) {
       showToast('error', 'Select Y-axis or at least one value to plot.');
       return;
@@ -1168,11 +1324,12 @@ function savePlotConfig() {
   if (type === 'pie') {
     cfg.pie_label_col = sel('plot-pie-label-col')?.value;
     cfg.pie_value_col = sel('plot-pie-value-col')?.value;
+    cfg.pie_show_percent_labels = document.getElementById('plot-pie-show-percent')?.checked ?? true;
   }
   if (editPlotIdx !== null) {
-    const existingId = plotConfigs[editPlotIdx]?.id;
-    if (existingId) cfg.id = existingId;
-    plotConfigs[editPlotIdx] = cfg;
+    const existing = plotConfigs[editPlotIdx];
+    if (existing?.id) cfg.id = existing.id;
+    plotConfigs[editPlotIdx] = { ...cfg };
     editPlotIdx = null;
     showToast('success', 'Plot updated.');
   } else {

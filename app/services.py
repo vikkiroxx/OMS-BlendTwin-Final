@@ -14,19 +14,23 @@ REQUIRED_COLUMNS = {"cycleno", "value", "series"}
 
 
 def list_trends(db: Session) -> List[Dict[str, Any]]:
-    """List all SQL templates (trends) with basic info."""
-    # Assuming all templates are active since column is missing
-    rows = db.query(SQLTemplate).all()
-    return [
-        {
+    """List all SQL templates (trends) with basic info. Deduplicates by template_id (keeps first)."""
+    rows = db.query(SQLTemplate).order_by(SQLTemplate.template_id).all()
+    seen = set()
+    result = []
+    for r in rows:
+        if r.template_id and r.template_id in seen:
+            continue
+        if r.template_id:
+            seen.add(r.template_id)
+        result.append({
             "template_id": r.template_id,
             "trend_code": r.trend_id,
             "trend_name": r.trend_name or r.trend_id,
             "is_active": True,
             "last_updated_on": r.last_updated_on.isoformat() if hasattr(r.last_updated_on, 'isoformat') else str(r.last_updated_on) if r.last_updated_on else None,
-        }
-        for r in rows
-    ]
+        })
+    return result
 
 
 def get_trend_by_id(db: Session, template_id: str) -> Optional[Dict[str, Any]]:
@@ -218,8 +222,11 @@ def create_template(
     template_id: Optional[str] = None,
     parameters: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Create new SQL template with all fields and parameters."""
+    """Create new SQL template with all fields and parameters. If template_id exists, updates instead (prevents duplicates)."""
     tid = template_id or trend_code
+    existing = db.query(SQLTemplate).filter(SQLTemplate.template_id == tid).first()
+    if existing:
+        return update_template(db, tid, sql_template, trend_name) or _template_to_dict(existing, db)
     t = SQLTemplate(
         template_id=tid,
         trend_id=trend_code,
@@ -324,17 +331,16 @@ def get_schema(db: Session) -> Dict[str, List[str]]:
     return result
 
 def delete_template(db: Session, template_id: str) -> bool:
-    """Delete SQL template and associated data."""
-    t = db.query(SQLTemplate).filter(SQLTemplate.template_id == template_id).first()
-    if not t:
+    """Delete SQL template and associated data. Removes all rows with this template_id."""
+    templates = db.query(SQLTemplate).filter(SQLTemplate.template_id == template_id).all()
+    if not templates:
         return False
-    
+    trend_id = templates[0].trend_id
     # Delete associated parameters and plots
-    db.query(TrendParameter).filter(TrendParameter.trendid == t.trend_id).delete()
-    db.query(TrendPlot).filter(TrendPlot.trend_id == t.trend_id).delete()
-    
-    # Delete the template itself
-    db.delete(t)
+    db.query(TrendParameter).filter(TrendParameter.trendid == trend_id).delete()
+    db.query(TrendPlot).filter(TrendPlot.trend_id == trend_id).delete()
+    # Delete all template rows (handles duplicates)
+    db.query(SQLTemplate).filter(SQLTemplate.template_id == template_id).delete()
     db.commit()
     return True
 
